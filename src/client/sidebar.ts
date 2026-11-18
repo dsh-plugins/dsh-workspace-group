@@ -1,5 +1,6 @@
 import type { DshLoaderUi } from '@dsh-plugin/dsh-loader/client';
 import { groupFor, type GroupState } from '../model.js';
+import { groupAt } from './drop-target.js';
 
 const rowSelector = '[data-row-key^="workspace:"][role="treeitem"]';
 
@@ -18,9 +19,11 @@ export function attachSidebar(options: {
   changed(lists: SidebarList[]): void;
 }): { update(): void; dispose(): void } {
   let lists: SidebarList[] = [];
-  let active: string | undefined;
+  let active: { id: string; row: HTMLElement; pointerId: number; startX: number; startY: number; x: number; y: number; dragging: boolean } | undefined;
+  let preview: HTMLElement | undefined;
+  let frame = 0;
+  let suppressClick = false;
   let disposed = false;
-  const restored = new Map<HTMLElement, { draggable: string | null }>();
   const marked = new Set<HTMLElement>();
   const stamp = (element: HTMLElement, key: string, value: string): void => {
     if (element.getAttribute(key) !== value) {
@@ -66,12 +69,6 @@ export function attachSidebar(options: {
       if (!id) {
         continue;
       }
-      if (!restored.has(row)) {
-        restored.set(row, { draggable: row.getAttribute('draggable') });
-      }
-      if (!row.draggable) {
-        row.draggable = true;
-      }
       const rows = byTree.get(tree) ?? [];
       rows.push({ id, row, section });
       byTree.set(tree, rows);
@@ -102,11 +99,6 @@ export function attachSidebar(options: {
     });
     lists = next;
     update();
-    for (const element of restored.keys()) {
-      if (!element.isConnected) {
-        restored.delete(element);
-      }
-    }
     for (const element of marked) {
       if (!element.isConnected) {
         marked.delete(element);
@@ -118,85 +110,185 @@ export function attachSidebar(options: {
   };
   const findRow = (target: EventTarget | null): HTMLElement | null => target instanceof Element
     ? target.closest<HTMLElement>(rowSelector) : null;
+  const scroller = (tree: HTMLElement): HTMLElement | undefined => {
+    for (let element = tree.parentElement; element; element = element.parentElement) {
+      if (/(auto|scroll)/.test(getComputedStyle(element).overflowY) && element.scrollHeight > element.clientHeight) {
+        return element;
+      }
+    }
+    return undefined;
+  };
+  const targetGroup = (x: number, y: number): HTMLElement | undefined => {
+    for (const list of lists) {
+      const tree = list.tree.getBoundingClientRect();
+      const bounds = {
+        left: Math.max(tree.left, 0), right: Math.min(tree.right, innerWidth),
+        top: Math.max(tree.top, 0), bottom: Math.min(tree.bottom, innerHeight),
+      };
+      for (let element = list.tree.parentElement; element; element = element.parentElement) {
+        const style = getComputedStyle(element);
+        if (style.display === 'contents') {
+          continue;
+        }
+        const rect = element.getBoundingClientRect();
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+          bounds.left = Math.max(bounds.left, rect.left + element.clientLeft);
+          bounds.right = Math.min(bounds.right, rect.left + element.clientLeft + element.clientWidth);
+        }
+        if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+          bounds.top = Math.max(bounds.top, rect.top + element.clientTop);
+          bounds.bottom = Math.min(bounds.bottom, rect.top + element.clientTop + element.clientHeight);
+        }
+      }
+      const headers = [...list.mount.querySelectorAll<HTMLElement>('[data-wg-header]')];
+      const id = groupAt({ x, y }, bounds, headers.map(header => {
+        const rect = header.getBoundingClientRect();
+        return { id: header.dataset.wgHeader!, top: rect.top, bottom: rect.bottom };
+      }));
+      if (id !== undefined) {
+        return headers.find(header => header.dataset.wgHeader === id);
+      }
+    }
+    return undefined;
+  };
   const clear = (): void => {
+    const pointerId = active?.pointerId;
     active = undefined;
+    cancelAnimationFrame(frame);
+    preview?.remove();
+    preview = undefined;
+    if (pointerId !== undefined && document.documentElement.hasPointerCapture(pointerId)) {
+      document.documentElement.releasePointerCapture(pointerId);
+    }
     for (const element of document.querySelectorAll('[data-wg-over]')) {
       element.removeAttribute('data-wg-over');
     }
     document.documentElement.removeAttribute('data-wg-dragging');
   };
-  const start = (event: DragEvent): void => {
+  const down = (event: PointerEvent): void => {
+    suppressClick = false;
+    if (event.button !== 0 || !event.isPrimary || event.pointerType === 'touch') {
+      return;
+    }
     const row = findRow(event.target);
     const entry = lists.flatMap(list => list.rows).find(item => item.row === row);
-    if (!entry || !event.dataTransfer) {
+    if (!entry || (event.target instanceof Element && event.target.closest('button,a,input,textarea,select'))) {
       return;
     }
-    active = entry.id;
-    event.stopImmediatePropagation();
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('application/x-dsh-workspace-group', entry.id);
-    event.dataTransfer.setData('text/plain', entry.id);
-    document.documentElement.setAttribute('data-wg-dragging', '');
-    if (row!.getAttribute('aria-expanded') === 'true') {
-      row!.click();
-    }
+    // 阻止原生拖动接管指针；捕获稳定的根节点，折叠工作区后仍可继续接收移动和松开事件。
+    event.preventDefault();
+    entry.row.focus({ preventScroll: true });
+    active = { id: entry.id, row: entry.row, pointerId: event.pointerId,
+      startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, dragging: false };
   };
-  const targetGroup = (target: EventTarget | null): HTMLElement | null => {
-    if (!(target instanceof Element)) {
-      return null;
-    }
-    const header = target.closest<HTMLElement>('[data-wg-header]');
-    if (header) {
-      return header;
-    }
-    const row = findRow(target);
-    const list = lists.find(item => item.rows.some(entry => entry.row === row));
-    const id = row?.dataset.rowKey?.slice('workspace:'.length);
-    return list && id ? [...list.mount.querySelectorAll<HTMLElement>('[data-wg-header]')]
-      .find(item => item.dataset.wgHeader === groupFor(options.read(), id)) ?? null : null;
-  };
-  const over = (event: DragEvent): void => {
-    if (!active) {
+  const paint = (): void => {
+    if (!active?.dragging) {
       return;
     }
-    const header = targetGroup(event.target);
-    event.stopImmediatePropagation();
+    for (const list of lists) {
+      const scroll = scroller(list.tree);
+      if (!scroll) {
+        continue;
+      }
+      const rect = scroll.getBoundingClientRect();
+      if (active.x >= rect.left && active.x < rect.right && active.y >= rect.top && active.y < rect.bottom) {
+        if (active.y < rect.top + 28) {
+          scroll.scrollTop -= 10;
+        } else if (active.y > rect.bottom - 28) {
+          scroll.scrollTop += 10;
+        }
+      }
+    }
+    const header = targetGroup(active.x, active.y);
     for (const element of document.querySelectorAll('[data-wg-over]')) {
       if (element !== header) {
         element.removeAttribute('data-wg-over');
       }
     }
     if (header) {
+      if (!header.hasAttribute('data-wg-over')) {
+        header.setAttribute('data-wg-over', '');
+      }
+    }
+    if (preview) {
+      preview.style.transform = `translate(${active.x + 14}px,${active.y + 10}px)`;
+    }
+    frame = requestAnimationFrame(paint);
+  };
+  const move = (event: PointerEvent): void => {
+    if (!active || event.pointerId !== active.pointerId) {
+      return;
+    }
+    active.x = event.clientX;
+    active.y = event.clientY;
+    if (!active.dragging) {
+      if (Math.hypot(active.x - active.startX, active.y - active.startY) < 6) {
+        return;
+      }
+      active.dragging = true;
+      suppressClick = true;
+      preview = active.row.cloneNode(true) as HTMLElement;
+      preview.removeAttribute('data-row-key');
+      preview.removeAttribute('tabindex');
+      preview.setAttribute('aria-hidden', 'true');
+      preview.classList.add('dsh-wg-drag-preview');
+      preview.style.width = `${active.row.getBoundingClientRect().width}px`;
+      document.body.appendChild(preview);
+      document.documentElement.setAttribute('data-wg-dragging', '');
+      document.documentElement.setPointerCapture(event.pointerId);
+      if (active.row.getAttribute('aria-expanded') === 'true') {
+        active.row.click();
+      }
+      paint();
+    }
+    event.stopImmediatePropagation();
+    event.preventDefault();
+  };
+  const up = (event: PointerEvent): void => {
+    if (!active || event.pointerId !== active.pointerId) {
+      return;
+    }
+    const source = active.id;
+    const dragging = active.dragging;
+    const header = dragging ? targetGroup(event.clientX, event.clientY) : undefined;
+    clear();
+    if (dragging) {
+      event.stopImmediatePropagation();
       event.preventDefault();
-      header.setAttribute('data-wg-over', '');
-      if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = 'move';
+      if (header && groupFor(options.read(), source) !== header.dataset.wgHeader) {
+        options.move(source, header.dataset.wgHeader!);
       }
     }
   };
-  const drop = (event: DragEvent): void => {
-    if (!active) {
-      return;
-    }
-    const header = targetGroup(event.target);
-    event.stopImmediatePropagation();
-    event.preventDefault();
-    const source = active;
-    clear();
-    if (header) {
-      options.move(source, header.dataset.wgHeader!);
+  const click = (event: MouseEvent): void => {
+    if (suppressClick && event.detail > 0) {
+      suppressClick = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
     }
   };
-  const end = (event: DragEvent): void => {
-    if (active) {
+  const nativeStart = (event: DragEvent): void => {
+    const row = findRow(event.target);
+    if (lists.some(list => list.rows.some(item => item.row === row))) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  };
+  const key = (event: KeyboardEvent): void => {
+    if (active && event.key === 'Escape') {
+      event.preventDefault();
       event.stopImmediatePropagation();
       clear();
     }
   };
-  document.addEventListener('dragstart', start, true);
-  document.addEventListener('dragover', over, true);
-  document.addEventListener('drop', drop, true);
-  document.addEventListener('dragend', end, true);
+  document.addEventListener('pointerdown', down, true);
+  document.addEventListener('pointermove', move, true);
+  document.addEventListener('pointerup', up, true);
+  document.addEventListener('pointercancel', clear, true);
+  document.addEventListener('click', click, true);
+  document.addEventListener('dragstart', nativeStart, true);
+  document.addEventListener('keydown', key, true);
+  window.addEventListener('blur', clear);
   const off = options.ui.onDomSettled(scan);
   scan();
   return {
@@ -205,19 +297,16 @@ export function attachSidebar(options: {
       disposed = true;
       off();
       clear();
-      document.removeEventListener('dragstart', start, true);
-      document.removeEventListener('dragover', over, true);
-      document.removeEventListener('drop', drop, true);
-      document.removeEventListener('dragend', end, true);
+      document.removeEventListener('pointerdown', down, true);
+      document.removeEventListener('pointermove', move, true);
+      document.removeEventListener('pointerup', up, true);
+      document.removeEventListener('pointercancel', clear, true);
+      document.removeEventListener('click', click, true);
+      document.removeEventListener('dragstart', nativeStart, true);
+      document.removeEventListener('keydown', key, true);
+      window.removeEventListener('blur', clear);
       for (const list of lists) {
         list.mount.remove();
-      }
-      for (const [row, attributes] of restored) {
-        if (attributes.draggable === null) {
-          row.removeAttribute('draggable');
-        } else {
-          row.setAttribute('draggable', attributes.draggable);
-        }
       }
       for (const element of marked) {
         for (const key of ['data-wg-tree', 'data-wg-section', 'data-wg-hidden']) {
@@ -225,7 +314,6 @@ export function attachSidebar(options: {
         }
         element.style.removeProperty('--dsh-wg-order');
       }
-      restored.clear();
       marked.clear();
     },
   };

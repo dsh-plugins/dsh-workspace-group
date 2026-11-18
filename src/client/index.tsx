@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
-import { Icon, Scrollbar, type DshLoaderUi } from '@dsh-plugin/dsh-loader/client';
+import { Arco, Icon, Scrollbar, type DshLoaderUi } from '@dsh-plugin/dsh-loader/client';
 import { groupFor, type GroupChange } from '../model.js';
 import { GroupStore, errorText } from './store.js';
 import { attachSidebar, type SidebarList } from './sidebar.js';
@@ -67,20 +67,40 @@ export function apply(ctx: ClientContext): void {
       request = undefined;
       render();
     }
-    const attach = () => attachSidebar({
-      ui: ctx.dshLoaderUi,
-      read: () => store.getSnapshot().value,
-      move: (workspaceId, groupId) => {
-        if (!store.getSnapshot().ready) {
-          ctx.contextMenus.notify('分区尚未加载，请稍后重试。');
-          return;
-        }
-        void store.change({ type: 'move', workspaceId, groupId }).catch(error => {
-          ctx.contextMenus.notify(`移动工作区失败：${errorText(error)}`);
-        });
-      },
-      changed: next => { lists = next; render(); },
-    });
+    const attach = () => {
+      const sidebar = attachSidebar({
+        ui: ctx.dshLoaderUi,
+        read: () => store.getSnapshot().value,
+        move: (workspaceId, groupId) => {
+          if (!store.getSnapshot().ready) {
+            ctx.contextMenus.notify('分区尚未加载，请稍后重试。');
+            return;
+          }
+          void store.change({ type: 'move', workspaceId, groupId }).catch(error => {
+            ctx.contextMenus.notify(`移动工作区失败：${errorText(error)}`);
+          });
+        },
+        changed: next => { lists = next; render(); },
+      });
+      const offAnchor = ctx.dshLoaderUi.defineAnchor('workspace-group.toolbar', {
+        describe: '工作区标题工具栏中的搜索入口',
+        find: () => [...document.querySelectorAll('[data-sidebar-workspace-header] input')]
+          .map(input => input.parentElement!.parentElement!),
+        insert: 'before',
+      });
+      const offToolbar = ctx.dshLoaderUi.mountReact('workspace-group.toolbar', {
+        id: 'workspace-group:create',
+        component: () => <CreateGroupButton store={store} open={open} />,
+      });
+      return {
+        update: sidebar.update,
+        dispose() {
+          offToolbar();
+          offAnchor();
+          sidebar.dispose();
+        },
+      };
+    };
     const registerMenu = () => ctx.contextMenus.register({
       id: name, target: 'workspace', order: 200,
       observe: () => [store],
@@ -139,6 +159,12 @@ export function apply(ctx: ClientContext): void {
   }, 'workspace-group:client');
 }
 
+function CreateGroupButton({ store, open }: { store: GroupStore; open(request: DialogRequest): void }): React.ReactElement {
+  const state = React.useSyncExternalStore(store.subscribe, store.getSnapshot);
+  return <button type="button" className="dsh-wg-create" aria-label="新建分区" title="新建分区"
+    disabled={!state.ready || state.saving} onClick={() => { open({ type: 'create' }); }}><Icon name="Add" size={14} /></button>;
+}
+
 function App({ store, lists, request, open, close }: {
   store: GroupStore; lists: SidebarList[]; request: DialogRequest | undefined;
   open(request: DialogRequest): void; close(): void;
@@ -168,8 +194,6 @@ function App({ store, lists, request, open, close }: {
           <button type="button" aria-label={`删除分区 ${group.title}`} title="删除分区" disabled={state.saving}
             onClick={() => { open({ type: 'delete', id: group.id, title: group.title }); }}><Icon name="Delete" size={14} /></button>
         </>}
-        {!group.id && <button type="button" aria-label="新建分区" title="新建分区" disabled={!state.ready || state.saving}
-          onClick={() => { open({ type: 'create' }); }}><Icon name="Add" size={15} /></button>}
       </div>)}
     </>, list.mount))}
     {request && <GroupDialog key={`${request.type}:${request.id ?? ''}:${request.workspaceId ?? ''}`} request={request} store={store} close={close} />}
@@ -178,16 +202,17 @@ function App({ store, lists, request, open, close }: {
 
 function GroupDialog({ request, store, close }: { request: DialogRequest; store: GroupStore; close(): void }): React.ReactElement {
   const dialog = React.useRef<HTMLDialogElement>(null);
-  const input = React.useRef<HTMLInputElement>(null);
+  const input = React.useRef<React.ElementRef<typeof Arco.Input>>(null);
   const [title, setTitle] = React.useState(request.title ?? '');
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState('');
   const label = request.type === 'create' ? '新建分区' : request.type === 'rename' ? '重命名分区' : '删除分区';
   const titleId = React.useId();
+  const inputId = React.useId();
   React.useEffect(() => {
     const previous = document.activeElement;
     dialog.current!.showModal();
-    input.current?.select();
+    input.current?.dom.select();
     return () => {
       if (previous instanceof HTMLElement && previous.isConnected) {
         previous.focus();
@@ -216,14 +241,15 @@ function GroupDialog({ request, store, close }: { request: DialogRequest; store:
     <form style={{ display: 'contents' }} onSubmit={event => { event.preventDefault(); if (!saving) { void save(); } }}>
       <Scrollbar style={{ flex: '1 1 auto', minHeight: 0 }}>
         {request.type === 'delete' ? <p>删除分区“{request.title}”后，其中的工作区将移回“项目”。工作区和会话会继续保留。</p>
-          : <label>分区名称<input ref={input} value={title} onChange={event => { setTitle(event.target.value); }}
-            required maxLength={60} disabled={saving} autoFocus placeholder="例如：开发、学习" /></label>}
+          : <label htmlFor={inputId}>分区名称<Arco.Input id={inputId} ref={input} value={title} onChange={setTitle}
+            required maxLength={60} disabled={saving} autoFocus status={error ? 'error' : undefined}
+            placeholder="例如：开发、学习" /></label>}
         {request.workspaceId && <p>创建后会将当前工作区移入此分区。</p>}
         {error && <p className="dsh-wg-error" role="alert">{error}</p>}
       </Scrollbar>
       <div className="dsh-wg-actions">
-        <button type="button" disabled={saving} onClick={close}>取消</button>
-        <button type="submit" disabled={saving || (request.type !== 'delete' && !title.trim())}>{saving ? '保存中…' : request.type === 'delete' ? '删除分区' : '保存'}</button>
+        <Arco.Button disabled={saving} onClick={close}>取消</Arco.Button>
+        <Arco.Button type="primary" htmlType="submit" loading={saving} disabled={request.type !== 'delete' && !title.trim()}>{request.type === 'delete' ? '删除分区' : '保存'}</Arco.Button>
       </div>
     </form>
   </dialog>;
