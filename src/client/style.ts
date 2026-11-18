@@ -1,8 +1,7 @@
 export const css = `
 [data-wg-tree]{display:flex!important;flex-direction:column;gap:2px}
-[data-wg-mount],[data-wg-section],[data-wg-section]>[role=group],[data-wg-section]>span{display:contents!important}
-[data-wg-section]>:not([role=group]),[data-wg-section]>span>*{order:var(--dsh-wg-order);flex-shrink:0}
-[data-wg-section]>:not([role=group]):not(span),[data-wg-section]>span>*{margin-left:16px;margin-right:4px}
+[data-wg-mount],[data-wg-section],[data-wg-section]>[role=group]{display:contents!important}
+[data-wg-section]>:not([role=group]){order:var(--dsh-wg-order);flex-shrink:0;margin-left:16px;margin-right:4px}
 [data-wg-section] [data-row-key^="workspace:"]{cursor:grab}
 [data-wg-section][data-wg-hidden=true]>:not([role=group]){display:none!important}
 [data-dshl-slot="workspace-group:create"]{display:flex;align-items:center;flex:none;margin-left:auto}
