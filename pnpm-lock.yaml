@@ -11,6 +11,9 @@ importers:
       '@dsh-plugin/dsh-loader':
         specifier: 2.0.0-dev.43799314028
         version: 2.0.0-dev.43799314028(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@dsh-plugin/dsh-ui-components':
+        specifier: 0.1.0-dev.44257064993
+        version: 0.1.0-dev.44257064993(@dsh-plugin/dsh-loader@2.0.0-dev.43799314028(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@types/node':
         specifier: ^26.2.0
         version: 26.6.6
@@ -63,6 +66,14 @@ packages:
         optional: true
       react-dom:
         optional: true
+
+  '@dsh-plugin/dsh-ui-components@0.1.0-dev.44257064993':
+    resolution: {integrity: sha512-lRHWGr3amgn+wWA7Jrcjyw5a6hFUY0ksiVE6hd0SAgauU4esV542Qw/XEAzt6Mo0QQ0el0sOWUQmAKyLgOecUg==}
+    engines: {node: '>=24.9.0'}
+    peerDependencies:
+      '@dsh-plugin/dsh-loader': ^2.0.0-0
+      react: '>=18'
+      react-dom: '>=18'
 
   '@emnapi/core@2.0.0-beta.2':
     resolution: {integrity: sha512-MzCVoWtcg4Pm2B3je5mMvYMvj3MmBKw+fU7vbsJc9/iT8ip6/eYIHo/Dsm/mr+wsHB6SEyJDuxB09Yy6r/8+4A==}
@@ -1231,6 +1242,14 @@ snapshots:
     transitivePeerDependencies:
       - '@types/react'
       - supports-color
+
+  '@dsh-plugin/dsh-ui-components@0.1.0-dev.44257064993(@dsh-plugin/dsh-loader@2.0.0-dev.43799314028(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+    dependencies:
+      '@dsh-plugin/dsh-loader': 2.0.0-dev.43799314028(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@icon-park/react': 1.4.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      dayjs: 1.11.23
+      react: 18.3.1
+      react-dom: 18.3.1(react@18.3.1)
 
   '@emnapi/core@2.0.0-beta.2':
     dependencies:

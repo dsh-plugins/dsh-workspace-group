@@ -1,2 +1,4 @@
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - '@dsh-plugin/dsh-ui-components@0.1.0-dev.44257064993'

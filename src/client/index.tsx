@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
-import { Arco, Icon, Scrollbar, type DshLoaderUi } from '@dsh-plugin/dsh-loader/client';
+import { type DshLoaderUi } from '@dsh-plugin/dsh-loader/client';
+import { Button, DshProvider, Field, Icon, IconButton, Input, Modal, type InputRef } from '@dsh-plugin/dsh-ui-components';
 import { groupFor, type GroupChange } from '../model.js';
 import { GroupStore, errorText } from './store.js';
 import { attachSidebar, type SidebarList } from './sidebar.js';
@@ -15,6 +16,7 @@ interface DialogRequest {
   id?: string;
   title?: string;
   workspaceId?: string;
+  trigger?: HTMLElement;
 }
 
 interface MenuAction {
@@ -60,7 +62,7 @@ export function apply(ctx: ClientContext): void {
       root.render(<App store={store} lists={lists} request={request} open={open} close={close} />);
     };
     function open(next: DialogRequest): void {
-      request = next;
+      request = { ...next, trigger: document.activeElement instanceof HTMLElement ? document.activeElement : undefined };
       render();
     }
     function close(): void {
@@ -161,8 +163,8 @@ export function apply(ctx: ClientContext): void {
 
 function CreateGroupButton({ store, open }: { store: GroupStore; open(request: DialogRequest): void }): React.ReactElement {
   const state = React.useSyncExternalStore(store.subscribe, store.getSnapshot);
-  return <button type="button" className="dsh-wg-create" aria-label="新建分区" title="新建分区"
-    disabled={!state.ready || state.saving} onClick={() => { open({ type: 'create' }); }}><Icon name="Add" size={14} /></button>;
+  return <DshProvider style={{ display: 'contents' }}><IconButton size="sm" label="新建分区" icon={<Icon name="Add" size={14} />}
+    disabled={!state.ready || state.saving} onClick={() => { open({ type: 'create' }); }} /></DshProvider>;
 }
 
 function App({ store, lists, request, open, close }: {
@@ -176,43 +178,41 @@ function App({ store, lists, request, open, close }: {
     void store.change(value).catch(() => undefined);
   };
   return <>
-    {lists.map(list => createPortal(<>
-      {state.error && <div className="dsh-wg-status" role="alert">{state.error}<button onClick={() => { void store.refresh(); }}>重新加载</button></div>}
+    {lists.map(list => createPortal(<DshProvider style={{ display: 'contents' }}>
+      {state.error && <div className="dsh-wg-status" role="alert">{state.error}<Button size="sm" variant="text" onClick={() => { void store.refresh(); }}>重新加载</Button></div>}
       {!state.ready && !state.error && <div className="dsh-wg-status" role="status">正在加载分区…</div>}
       {groups.map((group, index) => <div className="dsh-wg-header" data-wg-header={group.id} key={group.id}
         style={{ order: (index + 1) * 100000 }}>
-        <button type="button" className="dsh-wg-toggle" aria-expanded={!group.collapsed}
+        <Button variant="text" size="sm" className="dsh-wg-toggle" aria-expanded={!group.collapsed}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0, justifyContent: 'flex-start', textAlign: 'left', padding: 4, color: 'inherit', fontSize: 12 }}
           aria-label={`${group.collapsed ? '展开' : '折叠'}分区 ${group.title}`} disabled={!state.ready || state.saving}
           onClick={() => { change({ type: 'collapse', id: group.id, collapsed: !group.collapsed }); }}>
           <Icon name={group.collapsed ? 'ChevronRight' : 'ChevronDown'} size={13} />
           <span className="dsh-wg-title">{group.title}</span>
           <span className="dsh-wg-count">{list.rows.filter(row => groupFor(state.value, row.id) === group.id).length}</span>
-        </button>
+        </Button>
         {group.id && <>
-          <button type="button" aria-label={`重命名分区 ${group.title}`} title="重命名分区" disabled={state.saving}
-            onClick={() => { open({ type: 'rename', id: group.id, title: group.title }); }}><Icon name="Edit" size={14} /></button>
-          <button type="button" aria-label={`删除分区 ${group.title}`} title="删除分区" disabled={state.saving}
-            onClick={() => { open({ type: 'delete', id: group.id, title: group.title }); }}><Icon name="Delete" size={14} /></button>
+          <IconButton size="sm" label={`重命名分区 ${group.title}`} disabled={state.saving} icon={<Icon name="Edit" size={14} />}
+            onClick={() => { open({ type: 'rename', id: group.id, title: group.title }); }} />
+          <IconButton size="sm" label={`删除分区 ${group.title}`} disabled={state.saving} icon={<Icon name="Delete" size={14} />}
+            onClick={() => { open({ type: 'delete', id: group.id, title: group.title }); }} />
         </>}
       </div>)}
-    </>, list.mount))}
-    {request && <GroupDialog key={`${request.type}:${request.id ?? ''}:${request.workspaceId ?? ''}`} request={request} store={store} close={close} />}
+    </DshProvider>, list.mount))}
+    <DshProvider>{request && <GroupDialog key={`${request.type}:${request.id ?? ''}:${request.workspaceId ?? ''}`} request={request} store={store} close={close} />}</DshProvider>
   </>;
 }
 
 function GroupDialog({ request, store, close }: { request: DialogRequest; store: GroupStore; close(): void }): React.ReactElement {
-  const dialog = React.useRef<HTMLDialogElement>(null);
-  const input = React.useRef<React.ElementRef<typeof Arco.Input>>(null);
+  const input = React.useRef<InputRef>(null);
   const [title, setTitle] = React.useState(request.title ?? '');
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState('');
   const label = request.type === 'create' ? '新建分区' : request.type === 'rename' ? '重命名分区' : '删除分区';
-  const titleId = React.useId();
   const inputId = React.useId();
+  const formId = React.useId();
   React.useEffect(() => {
-    const previous = document.activeElement;
-    dialog.current!.showModal();
-    input.current?.dom.select();
+    const previous = request.trigger;
     return () => {
       if (previous instanceof HTMLElement && previous.isConnected) {
         previous.focus();
@@ -235,22 +235,22 @@ function GroupDialog({ request, store, close }: { request: DialogRequest; store:
       setSaving(false);
     }
   };
-  return <dialog className="dsh-wg-dialog" ref={dialog} aria-labelledby={titleId} aria-busy={saving}
-    onCancel={event => { event.preventDefault(); if (!saving) { close(); } }}>
-    <h2 id={titleId}>{label}</h2>
-    <form style={{ display: 'contents' }} onSubmit={event => { event.preventDefault(); if (!saving) { void save(); } }}>
-      <Scrollbar style={{ flex: '1 1 auto', minHeight: 0 }}>
+  return <Modal visible title={label} className="dsh-wg-dialog" style={{ width: 440 }} aria-busy={saving} autoFocus={request.type === 'delete'}
+    maskClosable={false} escToExit={!saving} closable={!saving}
+    afterOpen={() => { input.current?.dom.select(); }}
+    onCancel={() => { if (!saving) { close(); } }}
+    footer={<>
+      <Button variant="secondary" disabled={saving} onClick={close}>取消</Button>
+      <Button htmlType="submit" form={formId} danger={request.type === 'delete'} loading={saving}
+        disabled={request.type !== 'delete' && !title.trim()}>{request.type === 'delete' ? '删除分区' : '保存'}</Button>
+    </>}>
+    <form id={formId} onSubmit={event => { event.preventDefault(); if (!saving) { void save(); } }}>
         {request.type === 'delete' ? <p>删除分区“{request.title}”后，其中的工作区将移回“项目”。工作区和会话会继续保留。</p>
-          : <label htmlFor={inputId}>分区名称<Arco.Input id={inputId} ref={input} value={title} onChange={setTitle}
-            required maxLength={60} disabled={saving} autoFocus status={error ? 'error' : undefined}
-            placeholder="例如：开发、学习" /></label>}
+          : <Field label="分区名称" htmlFor={inputId}><Input id={inputId} ref={input} value={title} onChange={setTitle}
+            required maxLength={60} disabled={saving} autoFocus invalid={Boolean(error)}
+            placeholder="例如：开发、学习" /></Field>}
         {request.workspaceId && <p>创建后会将当前工作区移入此分区。</p>}
         {error && <p className="dsh-wg-error" role="alert">{error}</p>}
-      </Scrollbar>
-      <div className="dsh-wg-actions">
-        <Arco.Button disabled={saving} onClick={close}>取消</Arco.Button>
-        <Arco.Button type="primary" htmlType="submit" loading={saving} disabled={request.type !== 'delete' && !title.trim()}>{request.type === 'delete' ? '删除分区' : '保存'}</Arco.Button>
-      </div>
     </form>
-  </dialog>;
+  </Modal>;
 }

@@ -25,6 +25,7 @@
   "peerDependencies": { "@dsh-plugin/dsh-loader": "^2.0.0-dev.43799314028" },
   "devDependencies": {
     "@dsh-plugin/dsh-loader": "2.0.0-dev.43799314028",
+    "@dsh-plugin/dsh-ui-components": "0.1.0-dev.44257064993",
     "@types/node": "^26.2.0",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
