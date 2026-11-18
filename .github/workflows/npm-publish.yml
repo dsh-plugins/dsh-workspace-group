@@ -1,0 +1,74 @@
+name: CI 与 npm 发布
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24'
+  NPM_REGISTRY: 'https://registry.npmjs.org'
+
+jobs:
+  quality:
+    name: 质量检查 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+      - name: 安装 Node.js
+        uses: actions/setup-node@v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          registry-url: ${{ env.NPM_REGISTRY }}
+      - name: 安装锁定依赖
+        run: pnpm install --frozen-lockfile
+      - name: 类型检查
+        run: pnpm typecheck
+      - name: 构建插件
+        run: pnpm build
+      - name: 回归检查
+        run: pnpm test
+      - name: 检查 npm 包内容
+        run: npm pack --dry-run --ignore-scripts
+
+  publish:
+    name: 发布到 npm
+    needs: quality
+    if: >-
+      github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: write
+      id-token: write
+    uses: dsh-plugins/dsh-npm-publish/.github/workflows/npm-publish.yml@main
+    with:
+      node-version: '24'
+      pnpm-version: '11.17.0'
+      install-command: pnpm install --frozen-lockfile
+      prepare-command: |
+        npm pkg set repository.type=git "repository.url=git+https://github.com/${GITHUB_REPOSITORY}.git"
+        pnpm build
+        pnpm test
+        npm pack --dry-run --ignore-scripts
+      publish-flags: --access public --provenance --ignore-scripts
+      verify-git-head: true
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,3 @@
+- insert:
+    - id: dsh-workspace-group
+      name: '@dsh-plugin/dsh-workspace-group'
