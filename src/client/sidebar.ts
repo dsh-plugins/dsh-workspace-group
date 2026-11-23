@@ -3,6 +3,15 @@ import { groupFor, type GroupState } from '../model.js';
 import { groupAt } from './drop-target.js';
 
 const rowSelector = '[data-row-key^="workspace:"][role="treeitem"]';
+const headerSelector = '[data-wg-header]';
+const layoutSelector = `[data-row-key],${headerSelector}`;
+// 分区标题沿用宿主 AnimatedRows 的位移节奏。
+const headerGlide = { duration: 200, easing: 'ease-out' };
+
+interface HeaderPosition {
+  top: number;
+  animation?: Animation;
+}
 
 /** 宿主渲染的工作区列表；节点留在原 React 父级中，仅调整展示顺序。 */
 export interface SidebarList {
@@ -24,6 +33,71 @@ export function attachSidebar(options: {
   let frame = 0;
   let suppressClick = false;
   let disposed = false;
+  let headerPositions = new Map<HTMLElement, HeaderPosition>();
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const cancelHeaderMotion = (): void => {
+    for (const position of headerPositions.values()) {
+      position.animation?.cancel();
+      position.animation = undefined;
+    }
+  };
+  const onReducedMotion = (): void => {
+    if (reducedMotion.matches) {
+      cancelHeaderMotion();
+    }
+  };
+  const measureHeaders = (animatedTrees?: ReadonlySet<HTMLElement>): void => {
+    const next = new Map<HTMLElement, HeaderPosition>();
+    const glides: { header: HTMLElement; delta: number; position: HeaderPosition }[] = [];
+    for (const { tree, mount } of lists) {
+      const headers = mount.querySelectorAll<HTMLElement>(headerSelector);
+      const animate = animatedTrees?.has(tree) && !reducedMotion.matches;
+      if (headers.length === 0) {
+        continue;
+      }
+      const treeRect = tree.getBoundingClientRect();
+      const statusHeight = mount.querySelector('.dsh-wg-status')?.getBoundingClientRect().height ?? 0;
+      const statusGap = statusHeight > 0 ? Number.parseFloat(getComputedStyle(tree).rowGap) || 0 : 0;
+      // 滚动和顶部提示条的高度变化不属于工作区位移。
+      const origin = treeRect.top + statusHeight + statusGap;
+      for (const header of headers) {
+        const old = headerPositions.get(header);
+        const rect = header.getBoundingClientRect();
+        const transform = old?.animation ? getComputedStyle(header).transform : 'none';
+        const offset = transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m42;
+        const top = rect.top - origin - offset;
+        const position: HeaderPosition = { top };
+        next.set(header, position);
+        if (!old) {
+          continue;
+        }
+        if (!animate && Math.abs(old.top - top) < 0.5) {
+          position.animation = old.animation;
+          continue;
+        }
+        // 连续切换时，从上一段动画当前的偏移接续。
+        const delta = old.top + offset - top;
+        const lastTop = origin + top;
+        const firstTop = lastTop + delta;
+        const visible = rect.right > 0 && rect.left < innerWidth
+          && Math.min(firstTop, lastTop) < innerHeight && Math.max(firstTop, lastTop) + rect.height > 0;
+        if (animate && visible && Math.abs(delta) >= 0.5) {
+          glides.push({ header, delta, position });
+        }
+      }
+    }
+    for (const [header, position] of headerPositions) {
+      if (position.animation !== next.get(header)?.animation) {
+        position.animation?.cancel();
+      }
+    }
+    for (const { header, delta, position } of glides) {
+      position.animation = header.animate([
+        { transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' },
+      ], headerGlide);
+    }
+    headerPositions = next;
+  };
   const marked = new Set<HTMLElement>();
   const stamp = (element: HTMLElement, key: string, value: string): void => {
     if (element.getAttribute(key) !== value) {
@@ -31,7 +105,7 @@ export function attachSidebar(options: {
     }
     marked.add(element);
   };
-  const update = (): void => {
+  const applyLayout = (): void => {
     const state = options.read();
     for (const list of lists) {
       const groups = [...state.groups, { id: '', title: '项目', collapsed: state.defaultCollapsed }];
@@ -47,7 +121,11 @@ export function attachSidebar(options: {
       });
     }
   };
-  const scan = (): void => {
+  const update = (): void => {
+    applyLayout();
+    measureHeaders();
+  };
+  const scan = (animatedTrees?: ReadonlySet<HTMLElement>): void => {
     if (disposed) {
       return;
     }
@@ -92,13 +170,23 @@ export function attachSidebar(options: {
         list.tree.removeAttribute('data-wg-tree');
       }
     }
-    const changed = next.length !== lists.length || next.some((list, index) => {
-      const previous = lists[index];
-      return !previous || list.tree !== previous.tree || list.rows.length !== previous.rows.length
+    const treesChanged = next.length !== lists.length || next.some((list, index) => list.tree !== lists[index]?.tree);
+    const changed = treesChanged || next.some((list, index) => {
+      const previous = lists[index]!;
+      return list.rows.length !== previous.rows.length
         || list.rows.some((item, row) => item.row !== previous.rows[row]?.row || item.id !== previous.rows[row]?.id);
     });
     lists = next;
-    update();
+    if (treesChanged) {
+      treeObserver.disconnect();
+      for (const { tree } of lists) {
+        treeObserver.observe(tree, { childList: true, subtree: true, attributeFilter: ['aria-expanded'], attributeOldValue: true });
+      }
+    }
+    applyLayout();
+    if (changed || animatedTrees) {
+      measureHeaders(animatedTrees);
+    }
     for (const element of marked) {
       if (!element.isConnected) {
         marked.delete(element);
@@ -108,6 +196,28 @@ export function attachSidebar(options: {
       options.changed(lists);
     }
   };
+  const treeObserver = new MutationObserver(records => {
+    const animatedTrees = new Set<HTMLElement>();
+    let layoutChanged = false;
+    for (const record of records) {
+      const { target } = record;
+      if (record.type === 'attributes' && record.oldValue !== null && target instanceof HTMLElement && target.matches(rowSelector)
+        && target.getAttribute('aria-expanded') !== record.oldValue) {
+        const tree = target.closest<HTMLElement>('[data-wg-tree]');
+        if (tree) {
+          animatedTrees.add(tree);
+        }
+      } else if (record.type === 'childList' && !layoutChanged) {
+        layoutChanged = [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element
+          && (node.matches(layoutSelector) || node.querySelector(layoutSelector) !== null));
+      }
+    }
+    if (layoutChanged && animatedTrees.size > 0) {
+      scan(animatedTrees);
+    } else if (layoutChanged) {
+      measureHeaders();
+    }
+  });
   const findRow = (target: EventTarget | null): HTMLElement | null => target instanceof Element
     ? target.closest<HTMLElement>(rowSelector) : null;
   const scroller = (tree: HTMLElement): HTMLElement | undefined => {
@@ -125,6 +235,15 @@ export function attachSidebar(options: {
         left: Math.max(tree.left, 0), right: Math.min(tree.right, innerWidth),
         top: Math.max(tree.top, 0), bottom: Math.min(tree.bottom, innerHeight),
       };
+      const headers = [...list.mount.querySelectorAll<HTMLElement>(headerSelector)].map(element => {
+        const { top, bottom } = element.getBoundingClientRect();
+        // 收起后标题可能暂时滑出列表的新边界，仍按可见位置判定放置目标。
+        if (headerPositions.get(element)?.animation?.playState === 'running') {
+          bounds.top = Math.min(bounds.top, Math.max(top, 0));
+          bounds.bottom = Math.max(bounds.bottom, Math.min(bottom, innerHeight));
+        }
+        return { element, id: element.dataset.wgHeader!, top, bottom };
+      });
       for (let element = list.tree.parentElement; element; element = element.parentElement) {
         const style = getComputedStyle(element);
         if (style.display === 'contents') {
@@ -140,13 +259,9 @@ export function attachSidebar(options: {
           bounds.bottom = Math.min(bounds.bottom, rect.top + element.clientTop + element.clientHeight);
         }
       }
-      const headers = [...list.mount.querySelectorAll<HTMLElement>('[data-wg-header]')];
-      const id = groupAt({ x, y }, bounds, headers.map(header => {
-        const rect = header.getBoundingClientRect();
-        return { id: header.dataset.wgHeader!, top: rect.top, bottom: rect.bottom };
-      }));
+      const id = groupAt({ x, y }, bounds, headers);
       if (id !== undefined) {
-        return headers.find(header => header.dataset.wgHeader === id);
+        return headers.find(header => header.id === id)?.element;
       }
     }
     return undefined;
@@ -289,6 +404,7 @@ export function attachSidebar(options: {
   document.addEventListener('dragstart', nativeStart, true);
   document.addEventListener('keydown', key, true);
   window.addEventListener('blur', clear);
+  reducedMotion.addEventListener('change', onReducedMotion);
   const off = options.ui.onDomSettled(scan);
   scan();
   return {
@@ -296,6 +412,10 @@ export function attachSidebar(options: {
     dispose() {
       disposed = true;
       off();
+      treeObserver.disconnect();
+      reducedMotion.removeEventListener('change', onReducedMotion);
+      cancelHeaderMotion();
+      headerPositions.clear();
       clear();
       document.removeEventListener('pointerdown', down, true);
       document.removeEventListener('pointermove', move, true);
