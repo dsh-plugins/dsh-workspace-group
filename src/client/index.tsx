@@ -11,6 +11,9 @@ import { css } from './style.js';
 export const name = '@dsh-plugin/dsh-workspace-group';
 export const inject = ['dshLoaderUi', 'contextMenus'];
 
+// 保持样式引用稳定，避免保存状态更新时重复同步浮层主题变量。
+const sidebarProviderStyle: React.CSSProperties = { display: 'contents' };
+
 interface DialogRequest {
   type: 'create' | 'rename' | 'delete';
   id?: string;
@@ -163,7 +166,7 @@ export function apply(ctx: ClientContext): void {
 
 function CreateGroupButton({ store, open }: { store: GroupStore; open(request: DialogRequest): void }): React.ReactElement {
   const state = React.useSyncExternalStore(store.subscribe, store.getSnapshot);
-  return <DshProvider style={{ display: 'contents' }}><IconButton size="sm" label="新建分区" icon={<Icon name="Add" size={14} />}
+  return <DshProvider style={sidebarProviderStyle}><IconButton size="sm" label="新建分区" icon={<Icon name="Add" size={14} />}
     disabled={!state.ready || state.saving} onClick={() => { open({ type: 'create' }); }} /></DshProvider>;
 }
 
@@ -178,7 +181,7 @@ function App({ store, lists, request, open, close }: {
     void store.change(value).catch(() => undefined);
   };
   return <>
-    {lists.map(list => createPortal(<DshProvider style={{ display: 'contents' }}>
+    {lists.map(list => createPortal(<DshProvider style={sidebarProviderStyle}>
       {state.error && <div className="dsh-wg-status" role="alert">{state.error}<Button size="sm" variant="text" onClick={() => { void store.refresh(); }}>重新加载</Button></div>}
       {!state.ready && !state.error && <div className="dsh-wg-status" role="status">正在加载分区…</div>}
       {groups.map((group, index) => <div className="dsh-wg-header" data-wg-header={group.id} key={group.id}
